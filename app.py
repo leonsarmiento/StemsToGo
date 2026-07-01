@@ -339,17 +339,31 @@ def main():
         st.caption(f"Log file location: `{log_file}`")
     
     # Check for required dependencies
+    torchcodec_available = False
     try:
         import torchcodec
+        torchcodec_available = True
+        logger.info("torchcodec loaded successfully")
     except (ImportError, RuntimeError) as e:
+        logger.warning(f"torchcodec not available: {e}")
+    
+    if not torchcodec_available:
         st.error(
-            f"**torchcodec failed to load.**\n\n"
-            f"Error: {str(e)[:500]}\n\n"
-            f"This usually means FFmpeg shared libraries are not installed.\n"
-            f"On Streamlit Cloud, ensure `bindep.txt` includes `ffmpeg`.\n\n"
-            f"Please contact the app administrator to fix this issue."
+            "**⚠️ torchcodec is required but not available.**\n\n"
+            "This app requires FFmpeg shared libraries to be installed.\n\n"
+            "**Deployment options:**\n"
+            "1. **Local deployment** (recommended): Run locally with conda\n"
+            "2. **Docker deployment**: Use the provided Dockerfile\n"
+            "3. **Streamlit Cloud**: Ensure `bindep.txt` is present and FFmpeg is installed\n\n"
+            "For local deployment:\n"
+            "```bash\n"
+            "conda create -n stemstogo python=3.10 -y && conda activate stemstogo\n"
+            "pip install -r requirements.txt\n"
+            "streamlit run app.py --server.port 8501\n"
+            "```\n\n"
+            "**Note:** Streamlit Cloud has limited system package support. "
+            "For production use, consider Docker deployment."
         )
-        logger.error(f"torchcodec failed to load: {e}")
         return
     
     # URL input

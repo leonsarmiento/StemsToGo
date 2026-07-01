@@ -1,2 +1,5 @@
-ffmpeg [platform:dpkg]
-ffmpeg-devel [platform:rpm]
+ffmpeg
+libavcodec-dev
+libavformat-dev
+libavutil-dev
+libswscale-dev

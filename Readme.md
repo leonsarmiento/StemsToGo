@@ -61,13 +61,34 @@ The Demucs `htdemucs_ft` model (~80MB) is downloaded automatically on first use 
 
 ## Deployment to Streamlit Cloud
 
+**⚠️ Important:** Streamlit Cloud has limited system package support. This app requires FFmpeg shared libraries (`libavutil.so.*`) which may not be available on Streamlit Cloud's free tier.
+
+**Recommended deployment methods:**
+
+### Option 1: Local Deployment (Easiest)
+```bash
+conda create -n stemstogo python=3.10 -y && conda activate stemstogo
+pip install -r requirements.txt
+streamlit run app.py --server.port 8501
+```
+
+### Option 2: Docker Deployment (Production Recommended)
+```bash
+# Build the image
+docker build -t stemstogo .
+
+# Run the container
+docker run -p 8501:8501 stemstogo
+```
+
+### Option 3: Streamlit Cloud (Limited Support)
 1. Push this repo to GitHub
 2. Go to [share.streamlit.io](https://share.streamlit.io)
 3. Connect your repository
-4. Streamlit will automatically install dependencies from `requirements.txt`
-5. The Demucs model will be downloaded on first use
+4. Streamlit will attempt to install dependencies from `requirements.txt` and `bindep.txt`
+5. **Note:** FFmpeg shared libraries may not be available, causing torchcodec to fail
 
-**Note:** Model caching persists across deployment restarts.
+**For production use, Docker deployment is strongly recommended.**
 
 ## Debugging & Logging
 
