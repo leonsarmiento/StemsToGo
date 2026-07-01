@@ -69,6 +69,48 @@ class StderrCapture:
         return captured
 
 
+# --- Deno JS Runtime (needed by yt-dlp for YouTube signature solving) ---
+DENO_DIR = Path(tempfile.gettempdir()) / "deno-bin"
+
+
+def ensure_deno_installed():
+    """Download and install the deno JS runtime if not present.
+
+    yt-dlp needs a JS runtime (deno) to solve YouTube's signature and
+    n-parameter challenges. Without it, high-quality audio formats are
+    dropped and downloads fail with HTTP 403.
+    """
+    deno_bin = DENO_DIR / "deno"
+    if deno_bin.exists():
+        os.environ["PATH"] = f"{DENO_DIR}:{os.environ.get('PATH', '')}"
+        logger.info(f"✓ deno JS runtime already installed at {deno_bin}")
+        return str(deno_bin)
+
+    logger.info("Installing deno JS runtime for yt-dlp signature solving...")
+    DENO_DIR.mkdir(parents=True, exist_ok=True)
+
+    import urllib.request
+    import zipfile
+    import io
+
+    url = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip"
+    try:
+        logger.info(f"Downloading deno from {url}...")
+        response = urllib.request.urlopen(url, timeout=120)
+        zip_data = response.read()
+
+        with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+            zf.extractall(DENO_DIR)
+
+        os.chmod(deno_bin, 0o755)
+        os.environ["PATH"] = f"{DENO_DIR}:{os.environ.get('PATH', '')}"
+        logger.info(f"✓ deno JS runtime installed at {deno_bin}")
+        return str(deno_bin)
+    except Exception as e:
+        logger.error(f"✗ Failed to install deno JS runtime: {e}")
+        return None
+
+
 # --- Initialization Logging ---
 def log_initialization():
     """Log initialization status and dependency checks."""
@@ -127,6 +169,10 @@ def log_initialization():
     except Exception as e:
         logger.warning(f"⚠ Could not check FFmpeg shared libraries: {e}")
 
+    # Install/check deno JS runtime (needed by yt-dlp for YouTube signature solving)
+    logger.info("Checking deno JS runtime...")
+    ensure_deno_installed()
+
     logger.info("=" * 60)
     logger.info("Initialization complete")
     logger.info("=" * 60)
@@ -162,7 +208,10 @@ def validate_url(url: str) -> bool:
 def download_audio(youtube_url: str, output_path: str) -> bool:
     """Download audio from YouTube using yt-dlp."""
     logger.info(f"Downloading audio from: {youtube_url}")
-    
+
+    # Ensure deno JS runtime is available for signature solving
+    ensure_deno_installed()
+
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
