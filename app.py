@@ -98,14 +98,10 @@ def log_initialization():
         try:
             __import__(import_name)
             logger.info(f"✓ {pkg_name} is available")
-        except ImportError as e:
-            logger.error(f"✗ {pkg_name} is missing: {e}")
-        except RuntimeError as e:
-            logger.error(
-                f"✗ {pkg_name} failed to load: {e}\n"
-                "This usually means FFmpeg shared libraries are missing or "
-                "torch/torchcodec versions are incompatible. See the README Docker deployment instructions."
-            )
+        except (ImportError, RuntimeError) as e:
+            logger.error(f"✗ {pkg_name} failed to load/is missing: {e}")
+        except Exception as e:
+            logger.error(f"✗ Unexpected error loading {pkg_name}: {e}")
 
     # Check ffmpeg
     try:
