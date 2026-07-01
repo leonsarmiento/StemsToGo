@@ -92,7 +92,7 @@ def log_initialization():
         'torchcodec': 'torchcodec',
         'demucs': 'demucs',
     }
-    
+
     logger.info("Checking dependencies...")
     for pkg_name, import_name in dependencies.items():
         try:
@@ -100,10 +100,16 @@ def log_initialization():
             logger.info(f"✓ {pkg_name} is available")
         except ImportError as e:
             logger.error(f"✗ {pkg_name} is missing: {e}")
-    
+        except RuntimeError as e:
+            logger.error(
+                f"✗ {pkg_name} failed to load: {e}\n"
+                "This usually means FFmpeg shared libraries are missing or "
+                "torch/torchcodec versions are incompatible. See the README Docker deployment instructions."
+            )
+
     # Check ffmpeg
     try:
-        result = subprocess.run(['ffmpeg', '-version'], 
+        result = subprocess.run(['ffmpeg', '-version'],
                               capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
             ffmpeg_version = result.stdout.split('\n')[0]
@@ -114,7 +120,17 @@ def log_initialization():
         logger.error("✗ ffmpeg is not installed or not in PATH")
     except Exception as e:
         logger.error(f"✗ Error checking ffmpeg: {e}")
-    
+
+    try:
+        import ctypes.util
+        avutil_library = ctypes.util.find_library("avutil")
+        if avutil_library:
+            logger.info(f"✓ FFmpeg shared library avutil found: {avutil_library}")
+        else:
+            logger.warning("⚠ FFmpeg shared library avutil was not found. torchcodec may fail to load.")
+    except Exception as e:
+        logger.warning(f"⚠ Could not check FFmpeg shared libraries: {e}")
+
     logger.info("=" * 60)
     logger.info("Initialization complete")
     logger.info("=" * 60)

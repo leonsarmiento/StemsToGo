@@ -14,7 +14,7 @@ A lightweight Streamlit web application that lets any user paste a YouTube video
 ## Prerequisites
 
 - **Python 3.10** (recommended) or higher
-- **ffmpeg** (system dependency for audio conversion)
+- **ffmpeg** with shared libraries (`libavutil.so.*`) for audio conversion and torchcodec
 
 ## Installation
 
@@ -61,7 +61,7 @@ The Demucs `htdemucs_ft` model (~80MB) is downloaded automatically on first use 
 
 ## Deployment to Streamlit Cloud
 
-**⚠️ Important:** Streamlit Cloud has limited system package support. This app requires FFmpeg shared libraries (`libavutil.so.*`) which may not be available on Streamlit Cloud's free tier.
+**⚠️ Important:** Streamlit Cloud free tier is not supported for this app because it does not provide FFmpeg shared libraries (`libavutil.so.*`) and may install incompatible torch/torchcodec versions. Use Docker for production or local deployment.
 
 **Recommended deployment methods:**
 
@@ -116,8 +116,8 @@ To view logs:
 | streamlit | >=1.28.0 | Web UI framework |
 | yt-dlp | >=2023.12.30 | YouTube audio extraction |
 | demucs | >=4.0.0 | Audio stem separation |
-| torchcodec | >=0.6.0 | Required by Demucs for audio saving |
-| ffmpeg-python | >=0.2.0 | Programmatic ffmpeg control |
+| torch | >=2.11.0 | PyTorch runtime required by Demucs and TorchCodec |
+| torchcodec | >=0.14.0 | Required by Demucs for audio saving |
 
 ## License
 
