@@ -341,12 +341,15 @@ def main():
     # Check for required dependencies
     try:
         import torchcodec
-    except ImportError:
+    except (ImportError, RuntimeError) as e:
         st.error(
-            "**torchcodec is required but not installed.** "
-            "Please install it with: `pip install torchcodec`"
+            f"**torchcodec failed to load.**\n\n"
+            f"Error: {str(e)[:500]}\n\n"
+            f"This usually means FFmpeg shared libraries are not installed.\n"
+            f"On Streamlit Cloud, ensure `bindep.txt` includes `ffmpeg`.\n\n"
+            f"Please contact the app administrator to fix this issue."
         )
-        logger.error("torchcodec is missing - application cannot function")
+        logger.error(f"torchcodec failed to load: {e}")
         return
     
     # URL input

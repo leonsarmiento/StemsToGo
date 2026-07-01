@@ -1,0 +1,2 @@
+ffmpeg [platform:dpkg]
+ffmpeg-devel [platform:rpm]
