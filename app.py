@@ -164,13 +164,15 @@ def download_audio(youtube_url: str, output_path: str) -> bool:
     logger.info(f"Downloading audio from: {youtube_url}")
     
     ydl_opts = {
-        'format': 'bestaudio',
+        'format': 'bestaudio/best',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'm4a',
             'preferredquality': '192',
         }],
         'outtmpl': output_path,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'referer': 'https://www.youtube.com/',
     }
     
     try:
