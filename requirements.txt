@@ -1,0 +1,8 @@
+# StemsToGo Requirements
+# Requires Python 3.10 or higher
+
+streamlit>=1.28.0
+yt-dlp>=2023.12.30
+demucs>=4.0.0
+torchcodec>=0.6.0
+ffmpeg-python>=0.2.0
