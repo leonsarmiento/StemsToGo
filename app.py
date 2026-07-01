@@ -1,10 +1,10 @@
 """
-StemsToGo - Streamlit App for YouTube Audio Stem Extraction
-Uses Demucs htdemucs_ft model for 4-stem separation (vocals, drums, bass, other)
+StemsToGo - Streamlit App for Audio Stem Extraction
+Upload any audio file and Demucs htdemucs_ft separates it into
+4 stems (vocals, drums, bass, other).
 """
 
 import os
-import re
 import sys
 import subprocess
 import tempfile
@@ -12,10 +12,8 @@ import threading
 import logging
 from queue import Queue
 from pathlib import Path
-from datetime import datetime
 
 import streamlit as st
-import yt_dlp
 
 
 # --- Configuration ---
@@ -69,48 +67,6 @@ class StderrCapture:
         return captured
 
 
-# --- Deno JS Runtime (needed by yt-dlp for YouTube signature solving) ---
-DENO_DIR = Path(tempfile.gettempdir()) / "deno-bin"
-
-
-def ensure_deno_installed():
-    """Download and install the deno JS runtime if not present.
-
-    yt-dlp needs a JS runtime (deno) to solve YouTube's signature and
-    n-parameter challenges. Without it, high-quality audio formats are
-    dropped and downloads fail with HTTP 403.
-    """
-    deno_bin = DENO_DIR / "deno"
-    if deno_bin.exists():
-        os.environ["PATH"] = f"{DENO_DIR}:{os.environ.get('PATH', '')}"
-        logger.info(f"✓ deno JS runtime already installed at {deno_bin}")
-        return str(deno_bin)
-
-    logger.info("Installing deno JS runtime for yt-dlp signature solving...")
-    DENO_DIR.mkdir(parents=True, exist_ok=True)
-
-    import urllib.request
-    import zipfile
-    import io
-
-    url = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip"
-    try:
-        logger.info(f"Downloading deno from {url}...")
-        response = urllib.request.urlopen(url, timeout=120)
-        zip_data = response.read()
-
-        with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-            zf.extractall(DENO_DIR)
-
-        os.chmod(deno_bin, 0o755)
-        os.environ["PATH"] = f"{DENO_DIR}:{os.environ.get('PATH', '')}"
-        logger.info(f"✓ deno JS runtime installed at {deno_bin}")
-        return str(deno_bin)
-    except Exception as e:
-        logger.error(f"✗ Failed to install deno JS runtime: {e}")
-        return None
-
-
 # --- Initialization Logging ---
 def log_initialization():
     """Log initialization status and dependency checks."""
@@ -130,7 +86,6 @@ def log_initialization():
     
     # Check critical dependencies
     dependencies = {
-        'yt-dlp': 'yt_dlp',
         'torchcodec': 'torchcodec',
         'demucs': 'demucs',
     }
@@ -169,10 +124,6 @@ def log_initialization():
     except Exception as e:
         logger.warning(f"⚠ Could not check FFmpeg shared libraries: {e}")
 
-    # Install/check deno JS runtime (needed by yt-dlp for YouTube signature solving)
-    logger.info("Checking deno JS runtime...")
-    ensure_deno_installed()
-
     logger.info("=" * 60)
     logger.info("Initialization complete")
     logger.info("=" * 60)
@@ -181,89 +132,30 @@ def log_initialization():
 # Run initialization logging
 log_initialization()
 
-# --- URL Validation ---
-def extract_video_id(url: str) -> str | None:
-    """Extract YouTube video ID from various URL formats."""
-    pattern = r'(?:v=|\/)([0-9A-Za-z_-]{11}).*'
-    match = re.search(pattern, url)
-    return match.group(1) if match else None
-
-
-def validate_url(url: str) -> bool:
-    """Validate that the input is a YouTube URL."""
-    if not url:
-        return False
-    # Check for common YouTube URL patterns
-    youtube_patterns = [
-        r'youtube\.com/watch',
-        r'youtu\.be/',
-        r'youtube\.com/shorts/',
-        r'youtube\.com/embed/',
-        r'youtube\.com/live/',
-    ]
-    return any(re.search(pattern, url) for pattern in youtube_patterns)
-
-
 # --- Pipeline Steps ---
-def download_audio(youtube_url: str, output_path: str) -> bool:
-    """Download audio from YouTube using yt-dlp."""
-    logger.info(f"Downloading audio from: {youtube_url}")
+def convert_to_wav(input_path: str, wav_path: str) -> bool:
+    """Convert any audio file (mp3, m4a, opus, wav, ...) to WAV using ffmpeg."""
+    logger.info(f"Converting {input_path} to WAV format")
 
-    # Ensure deno JS runtime is available for signature solving
-    ensure_deno_installed()
-
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'm4a',
-            'preferredquality': '192',
-        }],
-        'outtmpl': output_path,
-        'remote_components': ['ejs:github'],
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['tv', 'mediaconnect', 'web_embedded', 'web'],
-            }
-        },
-    }
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([youtube_url])
-        
-        logger.info(f"Audio downloaded successfully to: {output_path}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to download audio: {e}")
-        return False
-
-
-def convert_to_wav(m4a_path: str, wav_path: str) -> bool:
-    """Convert M4A to WAV using ffmpeg."""
-    logger.info(f"Converting {m4a_path} to WAV format")
-    
     cmd = [
         'ffmpeg', '-y',
-        '-i', m4a_path,
+        '-i', input_path,
         '-acodec', 'pcm_s16le',
         '-ar', '44100',
         '-ac', '2',
         wav_path
     ]
-    
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             logger.error(f"FFmpeg error: {result.stderr}")
-            st.error(f"FFmpeg error: {result.stderr}")
             return False
-        
+
         logger.info(f"WAV conversion successful: {wav_path}")
         return True
     except Exception as e:
         logger.error(f"FFmpeg execution error: {e}")
-        st.error(f"FFmpeg execution error: {e}")
         return False
 
 
@@ -289,24 +181,21 @@ def run_demucs(wav_path: str, output_dir: str) -> bool:
             text=True
         )
         
-        # Stream output for progress feedback and logging
+        # Log Demucs output (cannot write to Streamlit from this background thread)
         for line in process.stdout:
             logger.debug(line.strip())
-            st.write(line, end='')
-        
+
         process.wait()
-        
+
         if process.returncode != 0:
             logger.error(f"Demucs failed with return code {process.returncode}")
-            st.error(f"Demucs failed with return code {process.returncode}")
             return False
-        
+
         logger.info("Demucs separation completed successfully")
         return True
-        
+
     except Exception as e:
         logger.error(f"Demucs execution error: {e}")
-        st.error(f"Demucs execution error: {e}")
         return False
 
 
@@ -318,66 +207,51 @@ def get_stem_paths(output_dir: str) -> dict[str, str]:
         if os.path.exists(path):
             stem_paths[stem] = path
         else:
-            st.warning(f"Missing stem file: {path}")
-    
+            logger.warning(f"Missing stem file: {path}")
+
     return stem_paths
 
 
 # --- Background Pipeline ---
-def run_pipeline(youtube_url: str, q: Queue):
-    """Run the full extraction pipeline in a background thread."""
-    logger.info(f"Starting pipeline for URL: {youtube_url}")
-    
+def run_pipeline(input_audio_path: str, q: Queue):
+    """Run the extraction pipeline in a background thread.
+
+    Converts the uploaded audio to WAV, then runs Demucs to produce 4 stems.
+    """
+    logger.info(f"Starting pipeline for uploaded file: {input_audio_path}")
+
     try:
-        # Extract video ID
-        q.put(("progress", 0.05, "Extracting video ID..."))
-        video_id = extract_video_id(youtube_url)
-        if not video_id:
-            logger.error("Invalid YouTube URL - could not extract video ID")
-            q.put(("error", 0, "Invalid YouTube URL. Please check the link and try again."))
-            return
-        
-        logger.info(f"Extracted video ID: {video_id}")
-        
         # Create temp directories
-        temp_base = tempfile.mkdtemp(prefix=f"stem_{video_id}_")
-        m4a_path = os.path.join(temp_base, f"stem_{video_id}.m4a")
-        wav_path = os.path.join(temp_base, f"stem_{video_id}.wav")
-        output_dir = os.path.join(temp_base, f"output_{video_id}")
-        
+        temp_base = tempfile.mkdtemp(prefix="stem_upload_")
+        wav_path = os.path.join(temp_base, "input.wav")
+        output_dir = os.path.join(temp_base, "output")
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"Created temp directory: {temp_base}")
-        
-        # Step 1: Download audio
-        q.put(("progress", 0.1, "Downloading audio from YouTube..."))
-        if not download_audio(youtube_url, m4a_path):
-            q.put(("error", 0, "Failed to download audio from YouTube."))
+
+        # Step 1: Convert uploaded audio to WAV
+        q.put(("progress", 0.1, "Converting audio to WAV format..."))
+        if not convert_to_wav(input_audio_path, wav_path):
+            q.put(("error", 0, "Failed to convert audio. Is the file a valid audio format?"))
             return
-        
-        # Step 2: Convert to WAV
-        q.put(("progress", 0.3, "Converting audio to WAV format..."))
-        if not convert_to_wav(m4a_path, wav_path):
-            q.put(("error", 0, "Failed to convert audio format."))
-            return
-        
-        # Step 3: Separate stems with Demucs (LONGEST STEP)
-        q.put(("progress", 0.5, "Separating stems with Demucs (this may take a few minutes)..."))
+
+        # Step 2: Separate stems with Demucs (LONGEST STEP)
+        q.put(("progress", 0.3, "Separating stems with Demucs (this may take a few minutes)..."))
         if not run_demucs(wav_path, output_dir):
             q.put(("error", 0, "Failed to separate stems with Demucs."))
             return
-        
-        # Step 4: Get results
+
+        # Step 3: Collect results
         q.put(("progress", 0.9, "Stems ready! Generating download links..."))
         stem_paths = get_stem_paths(output_dir)
-        
+
         if not stem_paths:
             logger.error("No stem files were generated")
             q.put(("error", 0, "No stem files were generated."))
             return
-        
+
         logger.info(f"Pipeline completed successfully. Generated {len(stem_paths)} stem files")
         q.put(("done", 1.0, stem_paths, output_dir))
-        
+
     except Exception as e:
         logger.error(f"Pipeline error: {str(e)}", exc_info=True)
         q.put(("error", 0, f"Pipeline error: {str(e)}"))
@@ -390,10 +264,13 @@ def main():
         page_icon="🎵",
         layout="centered"
     )
-    
+
     st.title("🎵 StemsToGo")
-    st.markdown("Extract vocals, drums, bass, and other stems from any YouTube video.")
-    
+    st.markdown(
+        "Upload an audio file and Demucs will separate it into **vocals**, "
+        "**drums**, **bass**, and **other** stems."
+    )
+
     # Display initialization logs (collapsible)
     with st.expander("📋 View Initialization Logs", expanded=False):
         try:
@@ -402,9 +279,9 @@ def main():
             st.code(logs, language='text')
         except FileNotFoundError:
             st.info("No initialization logs found.")
-        
+
         st.caption(f"Log file location: `{log_file}`")
-    
+
     # Check for required dependencies
     torchcodec_available = False
     try:
@@ -413,106 +290,94 @@ def main():
         logger.info("torchcodec loaded successfully")
     except (ImportError, RuntimeError) as e:
         logger.warning(f"torchcodec not available: {e}")
-    
+
     if not torchcodec_available:
         st.error(
-            "**❌ This app cannot run on Streamlit Cloud free tier.**\n\n"
-            "The `torchcodec` library requires FFmpeg shared libraries "
-            "(`libavutil.so.*`) which are not available on Streamlit Cloud's "
-            "free hosting tier.\n\n"
-            "**Working deployment options:**\n\n"
-            "### 1. Local Deployment (Recommended for Testing)\n"
+            "**❌ A required dependency (`torchcodec`) failed to load.**\n\n"
+            "Demucs needs `torchcodec` (which depends on FFmpeg shared libraries) "
+            "to save MP3 stems.\n\n"
+            "**If running on Streamlit Cloud:** ensure `packages.txt` with `ffmpeg` "
+            "is present in the repo.\n\n"
+            "**If running locally:**\n"
             "```bash\n"
-            "conda create -n stemstogo python=3.10 -y && conda activate stemstogo\n"
             "pip install -r requirements.txt\n"
-            "streamlit run app.py --server.port 8501\n"
-            "```\n\n"
-            "### 2. Docker Deployment (Production)\n"
-            "```bash\n"
-            "docker build -t stemstogo .\n"
-            "docker run -p 8501:8501 stemstogo\n"
-            "```\n\n"
-            "### 3. Streamlit Cloud Paid Tier\n"
-            "If you need cloud hosting, consider Streamlit Cloud's paid plans "
-            "which may support system package installation.\n\n"
-            "**Why this happens:**\n"
-            "Streamlit Cloud free tier uses a minimal container that doesn't "
-            "include FFmpeg shared libraries. The `torchcodec` package (required "
-            "by Demucs for audio saving) needs these libraries to function.\n\n"
-            "For more information, see: "
-            "[Streamlit Cloud Documentation](https://docs.streamlit.io/deploy)"
+            "```\n"
+            "and install FFmpeg on your system."
         )
         return
-    
-    # URL input
-    youtube_url = st.text_input(
-        "Paste a YouTube URL",
-        placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/..."
+
+    # Supported audio formats (anything ffmpeg can decode)
+    audio_extensions = ["mp3", "wav", "m4a", "aac", "ogg", "opus", "flac", "wma", "aiff", "webm"]
+
+    uploaded_file = st.file_uploader(
+        "Upload an audio file",
+        type=audio_extensions,
+        help="MP3, WAV, M4A, OGG/Opus (WhatsApp/Telegram voice notes), FLAC, AIFF, and more. "
+             "WhatsApp/Telegram voice messages (.opus/.ogg) and Apple Voice Memos (.m4a) are supported."
     )
-    
-    # Validate URL
-    if youtube_url and not validate_url(youtube_url):
-        st.error("Please enter a valid YouTube URL.")
-    
+
+    if uploaded_file is not None:
+        st.audio(uploaded_file)
+
     # Extract button
-    if st.button("Extract Stems", type="primary", disabled=not youtube_url or not validate_url(youtube_url)):
-        if not youtube_url:
-            st.warning("Please enter a YouTube URL.")
-        elif not validate_url(youtube_url):
-            st.error("Invalid YouTube URL format.")
+    if st.button("Extract Stems", type="primary", disabled=uploaded_file is None):
+        if uploaded_file is None:
+            st.warning("Please upload an audio file first.")
         else:
+            # Persist the uploaded file to disk so the background thread can read it
+            temp_base = tempfile.mkdtemp(prefix="stem_upload_")
+            file_ext = Path(uploaded_file.name).suffix or ".audio"
+            input_path = os.path.join(temp_base, f"input{file_ext}")
+            with open(input_path, "wb") as f:
+                f.write(uploaded_file.getvalue())
+            logger.info(f"Saved uploaded file '{uploaded_file.name}' to {input_path}")
+
             # Create progress container
             progress_container = st.container()
-            
+
             with progress_container:
-                # Status messages
                 status_text = st.empty()
                 progress_bar = st.progress(0)
-                
-                # Create queue for background thread communication
+
                 q = Queue()
-                
-                # Start background pipeline
                 thread = threading.Thread(
                     target=run_pipeline,
-                    args=(youtube_url, q),
+                    args=(input_path, q),
                     daemon=True
                 )
                 thread.start()
-                
-                # Monitor progress
+
                 stem_paths = None
                 output_dir = None
-                
+
                 while thread.is_alive() or not q.empty():
                     try:
                         task, percent, *args = q.get(timeout=1)
-                        
+
                         if task == "progress":
                             message = args[0]
                             status_text.write(f"**{message}**")
                             progress_bar.progress(percent)
-                            
+
                         elif task == "done":
                             stem_paths = args[0]
                             output_dir = args[1]
                             progress_bar.progress(1.0)
                             status_text.write("**✓ Extraction complete!**")
                             break
-                            
+
                         elif task == "error":
                             error_msg = args[0]
                             progress_bar.progress(0)
                             status_text.error(f"**Error:** {error_msg}")
                             break
-                            
+
                     except Exception as e:
                         if "Empty" in str(e):
                             continue
                         st.error(f"Progress monitoring error: {e}")
                         break
-                
-                # If thread finished without queue message
+
                 if not stem_paths and not q.empty():
                     task, percent, *args = q.get()
                     if task == "done":
@@ -520,14 +385,12 @@ def main():
                         output_dir = args[1]
                     elif task == "error":
                         st.error(f"**Error:** {args[0]}")
-            
+
             # Display results
             if stem_paths:
                 st.success("Your stems are ready for download!")
-                
-                # Show file info
                 st.subheader("Download Your Stems")
-                
+
                 for stem in STEMS:
                     if stem in stem_paths:
                         file_size = os.path.getsize(stem_paths[stem]) / (1024 * 1024)  # MB
@@ -540,25 +403,26 @@ def main():
                                 mime="audio/mpeg",
                                 key=f"download_{stem}"
                             )
-                
+
                 # ZIP download option
                 import zipfile
                 import io
-                
+
+                base_name = Path(uploaded_file.name).stem or "stems"
                 zip_buffer = io.BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                     for stem, path in stem_paths.items():
                         with open(path, "rb") as f:
                             zip_file.writestr(f"{stem}{OUTPUT_SUFFIX}", f.read())
-                
+
                 zip_buffer.seek(0)
                 st.download_button(
                     label="Download All as ZIP",
                     data=zip_buffer,
-                    file_name=f"stems_{extract_video_id(youtube_url)}.zip",
+                    file_name=f"stems_{base_name}.zip",
                     mime="application/zip"
                 )
-                
+
                 # Cleanup option
                 if st.button("Clean up temp files"):
                     import shutil
