@@ -1,14 +1,20 @@
 # StemsToGo
 
-A lightweight Streamlit web application that lets any user paste a YouTube video URL and receive isolated audio stems (vocals, drums, bass, other) as downloadable MP3 files — powered by the Demucs `htdemucs_ft` model.
+A lightweight Streamlit web application that separates any uploaded audio or video file into isolated stems (vocals, drums, bass, other) as downloadable MP3 files — powered by the Demucs `htdemucs_ft` model.
 
 ## Features
 
-- **Single user flow:** Paste URL → Click "Extract" → Wait → Download 4 MP3 files
+- **Upload-based flow:** Upload audio/video → Click "Extract" → Preview & download 4 MP3 stems
 - **4-stem separation:** vocals, drums, bass, other
+- **Audio & video input:** MP3, WAV, M4A, OGG/Opus (WhatsApp/Telegram voice notes), FLAC, AIFF, MP4, MOV (incl. iPhone HEVC), MKV, AVI, and more. ffmpeg extracts the audio track from video files automatically.
+- **In-browser preview:** Audio/video player for the input; audio player for each extracted stem
 - **Background processing:** Never blocks the Streamlit main thread
 - **Progress tracking:** Real-time status updates during extraction
 - **Flexible downloads:** Individual stem buttons or ZIP archive
+- **Automatic storage management:**
+  - Uploaded input is deleted immediately after stems are extracted
+  - Background reaper deletes any temp files older than 1 hour
+  - Manual cleanup button for immediate temp file removal
 - **Comprehensive logging:** Initialization and runtime logs for debugging
 
 ## Prerequisites
@@ -39,6 +45,18 @@ python3 --version  # Should show 3.10.x or higher
 pip install -r requirements.txt
 ```
 
+On macOS, install ffmpeg with shared libraries:
+
+```bash
+brew install ffmpeg
+```
+
+On Debian/Ubuntu:
+
+```bash
+sudo apt-get install ffmpeg
+```
+
 ## Running Locally
 
 ```bash
@@ -49,46 +67,32 @@ Then open [http://localhost:8501](http://localhost:8501) in your browser.
 
 ## How It Works
 
-1. **URL Input:** Paste any YouTube URL (standard, short links, shorts, embeds, live)
-2. **Audio Download:** yt-dlp extracts audio from YouTube → `stem_<ID>.m4a`
-3. **Format Conversion:** ffmpeg converts to WAV → `stem_<ID>.wav`
-4. **Stem Separation:** Demucs `htdemucs_ft` model separates into 4 stems → `*.mp3`
-5. **Download:** Individual download buttons or ZIP archive
+1. **Upload:** User uploads an audio or video file
+2. **Format Conversion:** ffmpeg decodes the file (extracting the audio track from video containers) and converts to WAV → `input.wav`
+3. **Stem Separation:** Demucs `htdemucs_ft` model separates the WAV into 4 stems → `vocals.mp3`, `drums.mp3`, `bass.mp3`, `other.mp3`
+4. **Preview & Download:** In-browser audio preview of each stem; individual download buttons or ZIP archive
 
 ## Model Download
 
-The Demucs `htdemucs_ft` model (~80MB) is downloaded automatically on first use and cached locally. Subsequent runs use the cached model.
+The Demucs `htdemucs_ft` model (~80MB, 4 averaged sub-models) is downloaded automatically on first use and cached locally at `~/.cache/torch/hub/checkpoints/`. Subsequent runs use the cached model.
+
+## Storage Management
+
+The app manages temporary files automatically to prevent disk fill-up:
+
+- **Immediate cleanup:** The uploaded input file is deleted as soon as stem extraction completes (the stems live in a separate temp directory).
+- **Reaper daemon:** A background thread scans every 5 minutes and deletes any `stem_upload_*` temp directory older than 1 hour. This catches files from abandoned requests, browser disconnects, crashes, or users who don't click cleanup.
+- **Manual cleanup:** A "Clean up temp files" button removes the current session's temp files on demand.
 
 ## Deployment to Streamlit Cloud
 
-**⚠️ Important:** Streamlit Cloud free tier is not supported for this app because it does not provide FFmpeg shared libraries (`libavutil.so.*`) and may install incompatible torch/torchcodec versions. Use Docker for production or local deployment.
+StemsToGo runs on Streamlit Community Cloud. The `packages.txt` file declares `ffmpeg` as a system dependency, which Streamlit Cloud installs via apt — providing the shared libraries (`libavutil.so.*`) that torchcodec needs.
 
-**Recommended deployment methods:**
-
-### Option 1: Local Deployment (Easiest)
-```bash
-conda create -n stemstogo python=3.10 -y && conda activate stemstogo
-pip install -r requirements.txt
-streamlit run app.py --server.port 8501
-```
-
-### Option 2: Docker Deployment (Production Recommended)
-```bash
-# Build the image
-docker build -t stemstogo .
-
-# Run the container
-docker run -p 8501:8501 stemstogo
-```
-
-### Option 3: Streamlit Cloud (Limited Support)
 1. Push this repo to GitHub
 2. Go to [share.streamlit.io](https://share.streamlit.io)
-3. Connect your repository
-4. Streamlit will attempt to install dependencies from `requirements.txt` and `bindep.txt`
-5. **Note:** FFmpeg shared libraries may not be available, causing torchcodec to fail
-
-**For production use, Docker deployment is strongly recommended.**
+3. Connect your repository, set the main file to `app.py`
+4. Streamlit Cloud installs Python deps from `requirements.txt` and system deps from `packages.txt`
+5. First run downloads the Demucs model (~80MB), so the first extraction takes longer
 
 ## Debugging & Logging
 
@@ -104,20 +108,32 @@ To view logs:
 
 ## Constraints & Considerations
 
-- **Processing time:** ~3 minutes per 4-minute song on CPU
-- **File format:** MP3 at 128-192 kbps, 44100 Hz, stereo
-- **Temp files:** Auto-generated per request, cleanup available after download
+- **Processing time:** ~1 minute per 2.5 minutes of audio on CPU (varies by hardware)
+- **Output format:** MP3 at 128-192 kbps, 44100 Hz, stereo
+- **File size:** Streamlit's default upload limit is 200MB
 - **No user accounts:** Stateless app — each request is independent
+- **First run:** Downloads the Demucs model (~80MB), so the first extraction takes longer
 
 ## Requirements
 
 | Package | Version | Purpose |
 |---------|---------|---------|
 | streamlit | >=1.28.0 | Web UI framework |
-| yt-dlp | >=2023.12.30 | YouTube audio extraction |
 | demucs | >=4.0.0 | Audio stem separation |
 | torch | >=2.11.0 | PyTorch runtime required by Demucs and TorchCodec |
 | torchcodec | >=0.14.0 | Required by Demucs for audio saving |
+
+**System dependency:** `ffmpeg` (declared in `packages.txt` for Streamlit Cloud)
+
+## Project Structure
+
+```
+StemsToGo/
+├── app.py            # Main Streamlit application
+├── requirements.txt  # Python dependencies
+├── packages.txt      # System dependencies (ffmpeg) for Streamlit Cloud
+└── Readme.md         # This file
+```
 
 ## License
 
