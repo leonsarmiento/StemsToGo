@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import threading
 import logging
-from queue import Queue
+from queue import Queue, Empty
 from pathlib import Path
 
 import streamlit as st
@@ -43,9 +43,11 @@ formatter = logging.Formatter(
 console_handler.setFormatter(formatter)
 file_handler.setFormatter(formatter)
 
-# Add handlers to logger
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
+# Add handlers to logger (only once per process — Streamlit reruns this module)
+if not logger.handlers:
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    logger.propagate = False
 
 # Capture stderr for error logging
 class StderrCapture:
@@ -385,11 +387,8 @@ def main():
                             status_text.error(f"**Error:** {error_msg}")
                             break
 
-                    except Exception as e:
-                        if "Empty" in str(e):
-                            continue
-                        st.error(f"Progress monitoring error: {e}")
-                        break
+                    except Empty:
+                        continue
 
                 if not stem_paths and not q.empty():
                     task, percent, *args = q.get()
@@ -406,6 +405,7 @@ def main():
                     "output_dir": output_dir,
                     "base_name": Path(uploaded_file.name).stem or "stems",
                 }
+                st.rerun()
 
     # Display results from session_state (persists across reruns)
     results = st.session_state.get("results")
