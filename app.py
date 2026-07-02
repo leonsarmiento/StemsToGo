@@ -12,7 +12,6 @@ import subprocess
 import tempfile
 import threading
 import logging
-from queue import Queue, Empty
 from pathlib import Path
 
 import streamlit as st
@@ -273,49 +272,109 @@ def get_stem_paths(output_dir: str) -> dict[str, str]:
     return stem_paths
 
 
+# --- Job Persistence (survives mobile disconnects) ---
+# Job state lives on disk keyed by job_id, NOT in session state, so that a
+# fresh session (after a phone sleep/reconnect) can still find the results.
+import json
+import uuid
+
+
+def job_dir_for(job_id: str) -> str:
+    """Return the on-disk working dir for a job.
+
+    Uses the stem_upload_ prefix so the existing 1-hour reaper cleans it up.
+    """
+    return os.path.join(tempfile.gettempdir(), f"stem_upload_{job_id}")
+
+
+def write_manifest(job_id: str, data: dict):
+    """Merge-update the job's manifest.json atomically-ish."""
+    path = os.path.join(job_dir_for(job_id), "manifest.json")
+    current = {}
+    try:
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                current = json.load(f)
+    except Exception:
+        current = {}
+    current.update(data)
+    try:
+        jdir = job_dir_for(job_id)
+        with open(path, "w") as f:
+            json.dump(current, f)
+        # Bump dir mtime so the reaper never removes a still-running job
+        os.utime(jdir, None)
+    except Exception as e:
+        logger.warning(f"Could not write manifest for job {job_id}: {e}")
+
+
+def read_manifest(job_id: str) -> dict | None:
+    """Read a job's manifest, or None if the job dir is gone (reaped/never existed)."""
+    path = os.path.join(job_dir_for(job_id), "manifest.json")
+    try:
+        if not os.path.exists(path):
+            return None
+        with open(path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Could not read manifest for job {job_id}: {e}")
+        return None
+
+
 # --- Background Pipeline ---
-def run_pipeline(input_audio_path: str, q: Queue):
+def run_pipeline(input_audio_path: str, job_id: str):
     """Run the extraction pipeline in a background thread.
 
-    Converts the uploaded audio to WAV, then runs Demucs to produce 4 stems.
+    Writes durable status updates to manifest.json (keyed by job_id) so the
+    UI can recover after a mobile disconnect. The job's working dir is the
+    same dir that holds the uploaded input file.
     """
-    logger.info(f"Starting pipeline for uploaded file: {input_audio_path}")
+    job_dir = os.path.dirname(input_audio_path)
+    logger.info(f"Starting pipeline job {job_id} for: {input_audio_path}")
+
+    write_manifest(job_id, {"status": "converting"})
 
     try:
-        # Create temp directories
-        temp_base = tempfile.mkdtemp(prefix="stem_upload_")
-        wav_path = os.path.join(temp_base, "input.wav")
-        output_dir = os.path.join(temp_base, "output")
+        wav_path = os.path.join(job_dir, "input.wav")
+        output_dir = os.path.join(job_dir, "output")
         os.makedirs(output_dir, exist_ok=True)
-        logger.info(f"Created temp directory: {temp_base}")
 
-        # Step 1: Convert uploaded audio to WAV
-        q.put(("progress", 0.1, "Converting audio to WAV format..."))
+        # Step 1: Convert uploaded audio/video to WAV
         if not convert_to_wav(input_audio_path, wav_path):
-            q.put(("error", 0, "Failed to convert audio. Is the file a valid audio format?"))
+            write_manifest(job_id, {"status": "error",
+                                    "message": "Failed to convert audio. Is the file a valid format?"})
             return
 
         # Step 2: Separate stems with Demucs (LONGEST STEP)
-        q.put(("progress", 0.3, "Separating stems with Demucs (this may take a few minutes)..."))
+        write_manifest(job_id, {"status": "separating"})
         if not run_demucs(wav_path, output_dir):
-            q.put(("error", 0, "Failed to separate stems with Demucs."))
+            write_manifest(job_id, {"status": "error",
+                                    "message": "Failed to separate stems with Demucs."})
             return
 
         # Step 3: Collect results
-        q.put(("progress", 0.9, "Stems ready! Generating download links..."))
         stem_paths = get_stem_paths(output_dir)
-
         if not stem_paths:
-            logger.error("No stem files were generated")
-            q.put(("error", 0, "No stem files were generated."))
+            write_manifest(job_id, {"status": "error", "message": "No stem files were generated."})
             return
 
-        logger.info(f"Pipeline completed successfully. Generated {len(stem_paths)} stem files")
-        q.put(("done", 1.0, stem_paths, output_dir))
+        logger.info(f"Pipeline job {job_id} completed: {len(stem_paths)} stems")
+        write_manifest(job_id, {
+            "status": "done",
+            "stem_paths": stem_paths,
+            "output_dir": output_dir,
+        })
+
+        # Drop the original uploaded input now that stems are extracted
+        try:
+            os.remove(input_audio_path)
+            logger.info(f"Removed input file {input_audio_path}")
+        except Exception:
+            pass
 
     except Exception as e:
-        logger.error(f"Pipeline error: {str(e)}", exc_info=True)
-        q.put(("error", 0, f"Pipeline error: {str(e)}"))
+        logger.error(f"Pipeline error job {job_id}: {str(e)}", exc_info=True)
+        write_manifest(job_id, {"status": "error", "message": f"Pipeline error: {str(e)}"})
 
 
 # --- Status Messages (shown randomly during long waits) ---
@@ -498,101 +557,109 @@ def main():
         else:
             st.audio(uploaded_file)
 
-    # Clear previous results if a new file is uploaded
+    # --- Track the active job across reruns and reconnects ---
+    # A new upload forgets any previous job/results so we don't auto-restore
+    # a finished extraction over a fresh file.
     if uploaded_file is not None:
-        current_file = uploaded_file.name
-        if st.session_state.get("source_file") != current_file:
+        if st.session_state.get("source_file") != uploaded_file.name:
             st.session_state.pop("results", None)
-            st.session_state["source_file"] = current_file
+            st.session_state["source_file"] = uploaded_file.name
+            if "job" in st.query_params:
+                del st.query_params["job"]
 
-    # Extract button
+    # Restore finished results from the URL job id (survives mobile sleep/reconnect).
+    # session_state dies with the WebSocket; the job id in the URL does not.
+    job_id_in_url = st.query_params.get("job")
+    if job_id_in_url and "results" not in st.session_state:
+        m = read_manifest(job_id_in_url)
+        if m and m.get("status") == "done":
+            st.session_state["results"] = {
+                "stem_paths": m["stem_paths"],
+                "output_dir": m["output_dir"],
+                "base_name": m.get("base_name", "stems"),
+            }
+
+    # --- Extract button: start a new job ---
+    started_job_id = None
     if st.button("Extract Stems", type="primary", disabled=uploaded_file is None):
         if uploaded_file is None:
             st.warning("Please upload an audio file first.")
         else:
-            # Persist the uploaded file to disk so the background thread can read it
-            temp_base = tempfile.mkdtemp(prefix="stem_upload_")
+            started_job_id = uuid.uuid4().hex
+            job_dir = job_dir_for(started_job_id)
+            os.makedirs(job_dir, exist_ok=True)
             file_ext = Path(uploaded_file.name).suffix or ".audio"
-            input_path = os.path.join(temp_base, f"input{file_ext}")
+            input_path = os.path.join(job_dir, f"input{file_ext}")
             with open(input_path, "wb") as f:
                 f.write(uploaded_file.getvalue())
-            logger.info(f"Saved uploaded file '{uploaded_file.name}' to {input_path}")
+            base_name = Path(uploaded_file.name).stem or "stems"
+            write_manifest(started_job_id, {"status": "pending", "base_name": base_name})
+            st.query_params["job"] = started_job_id
+            logger.info(f"Saved upload '{uploaded_file.name}' -> {input_path} (job {started_job_id})")
+            thread = threading.Thread(target=run_pipeline, args=(input_path, started_job_id), daemon=True)
+            thread.start()
 
-            # Create progress container
-            progress_container = st.container()
+    # --- Live progress poll: works for a just-started job OR a reconnected running job ---
+    active_job = started_job_id or job_id_in_url
+    if active_job and "results" not in st.session_state:
+        m = read_manifest(active_job)
+        if m is None:
+            st.warning("This extraction has expired or was not found. "
+                       "Temp files are cleared after 1 hour — please upload and run again.")
+        elif m.get("status") == "done":
+            st.session_state["results"] = {
+                "stem_paths": m["stem_paths"],
+                "output_dir": m["output_dir"],
+                "base_name": m.get("base_name", "stems"),
+            }
+            st.rerun()
+        elif m.get("status") == "error":
+            st.error(f"**Error:** {m.get('message', 'unknown error')}")
+            if "job" in st.query_params:
+                del st.query_params["job"]
+        else:
+            # Running — poll the durable manifest and render progress.
+            status_text = st.empty()
+            progress_bar = st.progress(0)
+            last_rotation = time.time()
+            last_status = None
+            while True:
+                m = read_manifest(active_job)
+                if m is None:
+                    status_text.warning("This extraction has expired. Temp files are cleared after 1 hour.")
+                    break
+                status = m.get("status")
+                if status == "done":
+                    st.session_state["results"] = {
+                        "stem_paths": m["stem_paths"],
+                        "output_dir": m["output_dir"],
+                        "base_name": m.get("base_name", "stems"),
+                    }
+                    progress_bar.progress(1.0)
+                    status_text.write("**✓ Extraction complete!**")
+                    time.sleep(0.5)
+                    st.rerun()
+                    break
+                if status == "error":
+                    progress_bar.progress(0)
+                    status_text.error(f"**Error:** {m.get('message', 'unknown error')}")
+                    break
+                # running: show real sub-status, then rotate funny messages after 20s idle
+                label = {"pending": "Starting...",
+                         "converting": "Converting audio to WAV...",
+                         "separating": "Separating stems with Demucs (this may take a few minutes)..."}.get(status, "Processing...")
+                pct = {"pending": 0.05, "converting": 0.2, "separating": 0.5}.get(status, 0.1)
+                progress_bar.progress(pct)
+                if status != last_status:
+                    status_text.write(f"**{label}**")
+                    last_status = status
+                    last_rotation = time.time()
+                elif time.time() - last_rotation > 20:
+                    status_text.write(f"*{random.choice(FUNNY_MESSAGES)}*")
+                    last_rotation = time.time()
+                time.sleep(2)
 
-            with progress_container:
-                status_text = st.empty()
-                progress_bar = st.progress(0)
-
-                q = Queue()
-                thread = threading.Thread(
-                    target=run_pipeline,
-                    args=(input_path, q),
-                    daemon=True
-                )
-                thread.start()
-
-                stem_paths = None
-                output_dir = None
-                last_rotation = time.time()
-
-                while thread.is_alive() or not q.empty():
-                    try:
-                        task, percent, *args = q.get(timeout=1)
-
-                        if task == "progress":
-                            message = args[0]
-                            status_text.write(f"**{message}**")
-                            progress_bar.progress(percent)
-                            last_rotation = time.time()
-
-                        elif task == "done":
-                            stem_paths = args[0]
-                            output_dir = args[1]
-                            progress_bar.progress(1.0)
-                            status_text.write("**✓ Extraction complete!**")
-                            break
-
-                        elif task == "error":
-                            error_msg = args[0]
-                            progress_bar.progress(0)
-                            status_text.error(f"**Error:** {error_msg}")
-                            break
-
-                    except Empty:
-                        # Rotate a funny status message every 20s during long waits
-                        if time.time() - last_rotation > 20:
-                            status_text.write(f"*{random.choice(FUNNY_MESSAGES)}*")
-                            last_rotation = time.time()
-                        continue
-
-                if not stem_paths and not q.empty():
-                    task, percent, *args = q.get()
-                    if task == "done":
-                        stem_paths = args[0]
-                        output_dir = args[1]
-                    elif task == "error":
-                        st.error(f"**Error:** {args[0]}")
-
-            # Delete the uploaded input file now that stems are extracted
-            import shutil
-            try:
-                shutil.rmtree(temp_base, ignore_errors=True)
-                logger.info(f"Deleted uploaded input temp dir: {temp_base}")
-            except Exception as e:
-                logger.warning(f"Could not delete input temp dir: {e}")
-
-            # Store results in session_state so they survive reruns
-            if stem_paths:
-                st.session_state["results"] = {
-                    "stem_paths": stem_paths,
-                    "output_dir": output_dir,
-                    "base_name": Path(uploaded_file.name).stem or "stems",
-                }
-                st.rerun()
-
-    # Display results from session_state (persists across reruns)
+    # --- Results display (from session_state: just-finished OR restored from URL) ---
     results = st.session_state.get("results")
     if results:
         stem_paths = results["stem_paths"]
@@ -646,6 +713,8 @@ def main():
             if output_dir and os.path.exists(output_dir):
                 shutil.rmtree(os.path.dirname(output_dir))
             st.session_state.pop("results", None)
+            if "job" in st.query_params:
+                del st.query_params["job"]
             st.success("Temp files cleaned up. You can upload a new file.")
 
 
