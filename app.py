@@ -69,6 +69,50 @@ class StderrCapture:
         return captured
 
 
+# --- Temp File Cleanup ---
+TEMP_MAX_AGE_SECONDS = 60 * 60  # delete temp dirs older than 1 hour
+REAPER_SCAN_INTERVAL = 5 * 60   # scan every 5 minutes
+
+
+def _cleanup_reaper():
+    """Background daemon that deletes stale stem_upload_* temp dirs.
+
+    Runs forever, scanning every REAPER_SCAN_INTERVAL. Any temp dir with
+    the app's prefix older than TEMP_MAX_AGE_SECONDS is removed. This is
+    the storage safety net — it catches dirs left behind by abandoned
+    requests, crashes, or users who never click cleanup.
+    """
+    import time
+    import shutil
+    import glob
+
+    tmp_dir = tempfile.gettempdir()
+    logger.info(f"Cleanup reaper started (max age {TEMP_MAX_AGE_SECONDS}s, "
+                f"scan interval {REAPER_SCAN_INTERVAL}s)")
+
+    while True:
+        try:
+            now = time.time()
+            for path in glob.glob(os.path.join(tmp_dir, "stem_upload_*")):
+                try:
+                    age = now - os.path.getmtime(path)
+                    if age > TEMP_MAX_AGE_SECONDS:
+                        shutil.rmtree(path, ignore_errors=True)
+                        logger.info(f"Reaper deleted stale temp dir: {path} (age {int(age)}s)")
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"Reaper scan error: {e}")
+
+        time.sleep(REAPER_SCAN_INTERVAL)
+
+
+def start_cleanup_reaper():
+    """Start the cleanup reaper daemon thread (once)."""
+    thread = threading.Thread(target=_cleanup_reaper, daemon=True)
+    thread.start()
+
+
 # --- Initialization Logging ---
 def log_initialization():
     """Log initialization status and dependency checks."""
@@ -133,6 +177,9 @@ def log_initialization():
 
 # Run initialization logging
 log_initialization()
+
+# Start background cleanup reaper (storage safety net)
+start_cleanup_reaper()
 
 # --- Pipeline Steps ---
 def convert_to_wav(input_path: str, wav_path: str) -> bool:
@@ -397,6 +444,14 @@ def main():
                         output_dir = args[1]
                     elif task == "error":
                         st.error(f"**Error:** {args[0]}")
+
+            # Delete the uploaded input file now that stems are extracted
+            import shutil
+            try:
+                shutil.rmtree(temp_base, ignore_errors=True)
+                logger.info(f"Deleted uploaded input temp dir: {temp_base}")
+            except Exception as e:
+                logger.warning(f"Could not delete input temp dir: {e}")
 
             # Store results in session_state so they survive reruns
             if stem_paths:
