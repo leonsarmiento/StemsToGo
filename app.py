@@ -325,6 +325,13 @@ def main():
     if uploaded_file is not None:
         st.audio(uploaded_file)
 
+    # Clear previous results if a new file is uploaded
+    if uploaded_file is not None:
+        current_file = uploaded_file.name
+        if st.session_state.get("source_file") != current_file:
+            st.session_state.pop("results", None)
+            st.session_state["source_file"] = current_file
+
     # Extract button
     if st.button("Extract Stems", type="primary", disabled=uploaded_file is None):
         if uploaded_file is None:
@@ -392,49 +399,69 @@ def main():
                     elif task == "error":
                         st.error(f"**Error:** {args[0]}")
 
-            # Display results
+            # Store results in session_state so they survive reruns
             if stem_paths:
-                st.success("Your stems are ready for download!")
-                st.subheader("Download Your Stems")
+                st.session_state["results"] = {
+                    "stem_paths": stem_paths,
+                    "output_dir": output_dir,
+                    "base_name": Path(uploaded_file.name).stem or "stems",
+                }
 
-                for stem in STEMS:
-                    if stem in stem_paths:
-                        file_size = os.path.getsize(stem_paths[stem]) / (1024 * 1024)  # MB
-                        st.markdown(f"**{stem.capitalize()}** ({file_size:.2f} MB)")
-                        with open(stem_paths[stem], "rb") as f:
-                            st.download_button(
-                                label=f"Download {stem.capitalize()}",
-                                data=f,
-                                file_name=f"{stem}{OUTPUT_SUFFIX}",
-                                mime="audio/mpeg",
-                                key=f"download_{stem}"
-                            )
+    # Display results from session_state (persists across reruns)
+    results = st.session_state.get("results")
+    if results:
+        stem_paths = results["stem_paths"]
+        output_dir = results["output_dir"]
+        base_name = results["base_name"]
 
-                # ZIP download option
-                import zipfile
-                import io
+        st.success("Your stems are ready!")
+        st.subheader("Preview & Download")
 
-                base_name = Path(uploaded_file.name).stem or "stems"
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                    for stem, path in stem_paths.items():
-                        with open(path, "rb") as f:
-                            zip_file.writestr(f"{stem}{OUTPUT_SUFFIX}", f.read())
+        for stem in STEMS:
+            if stem in stem_paths:
+                file_size = os.path.getsize(stem_paths[stem]) / (1024 * 1024)  # MB
+                st.markdown(f"**{stem.capitalize()}** ({file_size:.2f} MB)")
 
-                zip_buffer.seek(0)
-                st.download_button(
-                    label="Download All as ZIP",
-                    data=zip_buffer,
-                    file_name=f"stems_{base_name}.zip",
-                    mime="application/zip"
-                )
+                # Audio preview
+                with open(stem_paths[stem], "rb") as f:
+                    st.audio(f, format="audio/mpeg")
 
-                # Cleanup option
-                if st.button("Clean up temp files"):
-                    import shutil
-                    if output_dir and os.path.exists(output_dir):
-                        shutil.rmtree(os.path.dirname(output_dir))
-                    st.success("Temp files cleaned up.")
+                # Download button
+                with open(stem_paths[stem], "rb") as f:
+                    st.download_button(
+                        label=f"⬇ Download {stem.capitalize()}",
+                        data=f,
+                        file_name=f"{stem}{OUTPUT_SUFFIX}",
+                        mime="audio/mpeg",
+                        key=f"download_{stem}"
+                    )
+
+        # ZIP download option
+        import zipfile
+        import io
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for stem, path in stem_paths.items():
+                with open(path, "rb") as f:
+                    zip_file.writestr(f"{stem}{OUTPUT_SUFFIX}", f.read())
+
+        zip_buffer.seek(0)
+        st.download_button(
+            label="📦 Download All as ZIP",
+            data=zip_buffer,
+            file_name=f"stems_{base_name}.zip",
+            mime="application/zip",
+            key="download_zip"
+        )
+
+        # Cleanup option
+        if st.button("🗑 Clean up temp files"):
+            import shutil
+            if output_dir and os.path.exists(output_dir):
+                shutil.rmtree(os.path.dirname(output_dir))
+            st.session_state.pop("results", None)
+            st.success("Temp files cleaned up. You can upload a new file.")
 
 
 if __name__ == "__main__":
