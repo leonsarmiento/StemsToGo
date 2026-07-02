@@ -6,6 +6,8 @@ Upload any audio file and Demucs htdemucs_ft separates it into
 
 import os
 import sys
+import time
+import random
 import subprocess
 import tempfile
 import threading
@@ -316,6 +318,117 @@ def run_pipeline(input_audio_path: str, q: Queue):
         q.put(("error", 0, f"Pipeline error: {str(e)}"))
 
 
+# --- Status Messages (shown randomly during long waits) ---
+FUNNY_MESSAGES = [
+    "Separating the singers from the shouters...",
+    "Asking the bass to step forward...",
+    "Convincing the drums they're the main character...",
+    "Teaching the vocals to fly solo...",
+    "Politely asking the guitar to leave the room...",
+    "Petting le chat...",
+    "Defragmenting memory, both RAM and personal...",
+    "Untangling the frequencies like old Christmas lights...",
+    "Giving the bass guitar its own apartment...",
+    "Negotiating custody of the chorus...",
+    "Sorting the loud from the proud...",
+    "Asking the hi-hat to speak up...",
+    "Teaching the snare drum some independence...",
+    "Isolating the isolates...",
+    "Convincing the reverb it's not wanted here...",
+    "Untying the sonic shoelaces...",
+    "Giving each stem a name and a backstory...",
+    "Separating the signal from the shenanigans...",
+    "Asking the vocals to use their indoor voice...",
+    "Polishing the cymbals... with a soft cloth...",
+    "Counting every single sample... 1, 2, 3...",
+    "Rearranging the furniture in the frequency domain...",
+    "Convincing the bass and kick they're not the same person...",
+    "Sending the drums to obedience school...",
+    "Explaining personal space to the synths...",
+    "Bribing the algorithm with coffee...",
+    "Consulting the neural network's horoscope...",
+    "Petting le chat (it helps the math)...",
+    "Aligning the chakras of the mix...",
+    "Asking the ghost of the producer for permission...",
+    "Defragmenting the drummer's sense of time...",
+    "Teaching the AI to appreciate jazz...",
+    "Counting frequencies on fingers and toes...",
+    "Untangling the bass from the mud...",
+    "Asking the vocals nicely... twice...",
+    "Separating the groove from the goop...",
+    "Washing the stems in spring water...",
+    "Convincing the model this song is worth it...",
+    "Polishing the vocals until they sparkle...",
+    "Knocking on the door of the latent space...",
+    "Whispering encouragement to the tensors...",
+    "Asking the GPU to stop sweating...",
+    "Convincing the CPU it can do this...",
+    "Separating the music from the mayhem...",
+    "Giving the silence some breathing room...",
+    "Counting the parameters... there's a lot...",
+    "Calibrating the vibes...",
+    "Tuning the universal resonator...",
+    "Asking the chorus to form an orderly queue...",
+    "Dusting off the spectrogram...",
+    "Teaching the frequencies to share nicely...",
+    "Convincing the track it wants to be separated...",
+    "Separating the beat from the beast...",
+    "Asking the rhythm to hold still...",
+    "Polishing the harmonics to a shine...",
+    "Petting le chat once more, for good luck...",
+    "Defragmenting the singer's emotions...",
+    "Untangling the melody from the memory...",
+    "Giving the drums a stern talking-to...",
+    "Asking the bass to stop hogging the low end...",
+    "Separating the wheat from the waveform...",
+    "Consulting the great spectrogram in the sky...",
+    "Aligning the phases of the moon...",
+    "Counting the beats per minute... slowly...",
+    "Teaching the stems to stand on their own...",
+    "Convincing the vocals they don't need autotune...",
+    "Separating the artists from the artifacts...",
+    "Polishing the transients...",
+    "Asking the reverb to kindly leave...",
+    "Untying the knot in the midrange...",
+    "Defragmenting the song's sense of self...",
+    "Giving each note a little pep talk...",
+    "Separating the magic from the math...",
+    "Asking the hi-hat to stop being so ticky...",
+    "Convincing the bass line it's not the melody...",
+    "Petting le chat's neural networks...",
+    "Counting grains of sand in the reverb tail...",
+    "Separating the song from its shadows...",
+    "Polishing the kick drum's shoe...",
+    "Asking the synths to file in single file...",
+    "Teaching the AI the meaning of 'groove'...",
+    "Convincing the model to trust its instincts...",
+    "Separating the chorus from the chaos...",
+    "Untangling the cord that powers the soul...",
+    "Giving the vocals a pep rally...",
+    "Asking the drums to find their inner peace...",
+    "Defragmenting the chorus's feelings...",
+    "Polishing every sample by hand...",
+    "Separating the hits from the misses...",
+    "Asking the bass to whisper, just once...",
+    "Convincing the frequencies they're all special...",
+    "Petting le chat one final time...",
+    "Counting the ways this song can be split...",
+    "Separating the rhythm from the rubble...",
+    "Polishing the stereo field with a chamois...",
+    "Asking the lead vocal to take a solo...",
+    "Defragmenting the band's group chat...",
+    "Untangling the harmony from the hype...",
+    "Giving the outro a moment to breathe...",
+    "Convincing every stem it's the main event...",
+    "Separating the bangers from the bungles...",
+    "Asking the compressor to take a deep breath...",
+    "Petting le chat's cousin, le dog...",
+    "Defragmenting the cat's commitment issues...",
+    "Untangling the last 1% of the waveform...",
+    "Convincing the final stem to come out of hiding...",
+]
+
+
 # --- Streamlit UI ---
 def main():
     st.set_page_config(
@@ -422,6 +535,7 @@ def main():
 
                 stem_paths = None
                 output_dir = None
+                last_rotation = time.time()
 
                 while thread.is_alive() or not q.empty():
                     try:
@@ -431,6 +545,7 @@ def main():
                             message = args[0]
                             status_text.write(f"**{message}**")
                             progress_bar.progress(percent)
+                            last_rotation = time.time()
 
                         elif task == "done":
                             stem_paths = args[0]
@@ -446,6 +561,10 @@ def main():
                             break
 
                     except Empty:
+                        # Rotate a funny status message every 10s during long waits
+                        if time.time() - last_rotation > 10:
+                            status_text.write(f"*{random.choice(FUNNY_MESSAGES)}*")
+                            last_rotation = time.time()
                         continue
 
                 if not stem_paths and not q.empty():
