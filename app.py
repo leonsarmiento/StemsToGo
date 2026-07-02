@@ -183,7 +183,11 @@ start_cleanup_reaper()
 
 # --- Pipeline Steps ---
 def convert_to_wav(input_path: str, wav_path: str) -> bool:
-    """Convert any audio file (mp3, m4a, opus, wav, ...) to WAV using ffmpeg."""
+    """Convert any audio or video file to WAV using ffmpeg.
+
+    For video files, ffmpeg extracts the audio track automatically.
+    Handles MP3, WAV, M4A, OGG/Opus, FLAC, MP4, MOV (incl. HEVC), MKV, etc.
+    """
     logger.info(f"Converting {input_path} to WAV format")
 
     cmd = [
@@ -361,14 +365,17 @@ def main():
         )
         return
 
-    # Supported audio formats (anything ffmpeg can decode)
+    # Supported formats (anything ffmpeg can decode — audio or video)
     audio_extensions = ["mp3", "wav", "m4a", "aac", "ogg", "opus", "flac", "wma", "aiff", "webm"]
+    video_extensions = ["mp4", "mov", "m4v", "avi", "mkv", "wmv", "flv", "3gp", "mts"]
+    accepted_types = list(set(audio_extensions + video_extensions))
 
     uploaded_file = st.file_uploader(
-        "Upload an audio file",
-        type=audio_extensions,
-        help="MP3, WAV, M4A, OGG/Opus (WhatsApp/Telegram voice notes), FLAC, AIFF, and more. "
-             "WhatsApp/Telegram voice messages (.opus/.ogg) and Apple Voice Memos (.m4a) are supported."
+        "Upload an audio or video file",
+        type=accepted_types,
+        help="Audio: MP3, WAV, M4A, OGG/Opus (WhatsApp/Telegram voice notes), FLAC, AIFF, etc. "
+             "Video: MP4, MOV/M4V (incl. iPhone HEVC), MKV, AVI, WEBM, WMV, 3GP — the audio track "
+             "is extracted automatically."
     )
 
     if uploaded_file is not None:
