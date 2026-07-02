@@ -10,6 +10,7 @@ A lightweight Streamlit web application that separates any uploaded audio or vid
 - **In-browser preview:** Audio/video player for the input; audio player for each extracted stem
 - **Background processing:** Never blocks the Streamlit main thread
 - **Progress tracking:** Real-time status updates during extraction
+- **Mobile-friendly:** Extractions survive phone sleep / app-switching — finished stems are waiting when you return (see [Resilience & Mobile](#resilience--mobile) below)
 - **Flexible downloads:** Individual stem buttons or ZIP archive
 - **Automatic storage management:**
   - Uploaded input is deleted immediately after stems are extracted
@@ -83,6 +84,19 @@ The app manages temporary files automatically to prevent disk fill-up:
 - **Immediate cleanup:** The uploaded input file is deleted as soon as stem extraction completes (the stems live in a separate temp directory).
 - **Reaper daemon:** A background thread scans every 5 minutes and deletes any `stem_upload_*` temp directory older than 1 hour. This catches files from abandoned requests, browser disconnects, crashes, or users who don't click cleanup.
 - **Manual cleanup:** A "Clean up temp files" button removes the current session's temp files on demand.
+
+## Resilience & Mobile
+
+Long-running jobs (Demucs takes ~1 min per 2.5 min of audio) collide with two realities on mobile: the browser suspends the page when backgrounded, and Streamlit's session lives only as long as the WebSocket stays open. StemsToGo is built so a job survives both.
+
+**How it works:**
+
+- **Durable job state.** Each extraction is a *job* with a unique id. Its state — `pending` → `converting` → `separating` → `done`/`error`, plus the resulting stem paths — is written to a `manifest.json` on disk, **not** in Streamlit session state. The background thread keeps running server-side regardless of what the browser does.
+- **The job id lives in the URL** (`?job=…` via query params). URLs survive a reconnect; session state does not. When the phone wakes and the browser reconnects, the app reads the id from the URL, looks up the manifest, and restores the finished stems (or re-enters the live progress poll if the job is still running).
+- **Non-blocking progress polling.** Each script run reads the manifest *once*, renders the current status, and schedules the next check. No long-running loop holds the script open — so a multi-minute job can't trip Streamlit's hung-script detection. If the phone sleeps, the next poll simply resumes on wake.
+- **Active jobs can't be reaped.** The 1-hour temp-file reaper is prevented from deleting a still-running job: every manifest write bumps the job directory's mtime, so an active job always looks fresh.
+
+**What is still lost on disconnect:** the live progress bar freezes the moment the page is suspended (that's fundamental to Streamlit's model and can't be recovered). But the *results* are preserved — the difference between "app crashed, I lost everything" and "I stepped away and my stems were waiting."
 
 ## Deployment to Streamlit Cloud
 
