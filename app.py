@@ -379,7 +379,11 @@ def main():
     )
 
     if uploaded_file is not None:
-        st.audio(uploaded_file)
+        file_suffix = Path(uploaded_file.name).suffix.lower().lstrip(".")
+        if file_suffix in video_extensions:
+            st.video(uploaded_file)
+        else:
+            st.audio(uploaded_file)
 
     # Clear previous results if a new file is uploaded
     if uploaded_file is not None:
