@@ -618,16 +618,17 @@ def main():
             if "job" in st.query_params:
                 del st.query_params["job"]
         else:
-            # Running — poll the durable manifest and render progress.
+            # Running — poll the durable manifest ONCE per script run, then rerun.
+            # This is non-blocking: each run is short and atomic, so Streamlit's
+            # server stays healthy and a long job can't crash the app. If the
+            # phone sleeps, the next rerun simply resumes when it wakes.
             status_text = st.empty()
             progress_bar = st.progress(0)
-            last_rotation = time.time()
-            last_status = None
-            while True:
-                m = read_manifest(active_job)
-                if m is None:
-                    status_text.warning("This extraction has expired. Temp files are cleared after 1 hour.")
-                    break
+
+            m = read_manifest(active_job)
+            if m is None:
+                status_text.warning("This extraction has expired. Temp files are cleared after 1 hour.")
+            else:
                 status = m.get("status")
                 if status == "done":
                     st.session_state["results"] = {
@@ -637,27 +638,40 @@ def main():
                     }
                     progress_bar.progress(1.0)
                     status_text.write("**✓ Extraction complete!**")
+                    for k in ("poll_last_status", "poll_last_rotation", "poll_current_msg"):
+                        st.session_state.pop(k, None)
                     time.sleep(0.5)
                     st.rerun()
-                    break
-                if status == "error":
+                elif status == "error":
                     progress_bar.progress(0)
                     status_text.error(f"**Error:** {m.get('message', 'unknown error')}")
-                    break
-                # running: show real sub-status, then rotate funny messages after 20s idle
-                label = {"pending": "Starting...",
-                         "converting": "Converting audio to WAV...",
-                         "separating": "Separating stems with Demucs (this may take a few minutes)..."}.get(status, "Processing...")
-                pct = {"pending": 0.05, "converting": 0.2, "separating": 0.5}.get(status, 0.1)
-                progress_bar.progress(pct)
-                if status != last_status:
-                    status_text.write(f"**{label}**")
-                    last_status = status
-                    last_rotation = time.time()
-                elif time.time() - last_rotation > 20:
-                    status_text.write(f"*{random.choice(FUNNY_MESSAGES)}*")
-                    last_rotation = time.time()
-                time.sleep(2)
+                    for k in ("poll_last_status", "poll_last_rotation", "poll_current_msg"):
+                        st.session_state.pop(k, None)
+                else:
+                    label = {"pending": "Starting...",
+                             "converting": "Converting audio to WAV...",
+                             "separating": "Separating stems with Demucs (this may take a few minutes)..."}.get(status, "Processing...")
+                    pct = {"pending": 0.05, "converting": 0.2, "separating": 0.5}.get(status, 0.1)
+                    progress_bar.progress(pct)
+
+                    # Rotation state persists across reruns in session_state
+                    last_status = st.session_state.get("poll_last_status")
+                    last_rotation = st.session_state.get("poll_last_rotation", time.time())
+                    current_msg = st.session_state.get("poll_current_msg", f"**{label}**")
+
+                    if status != last_status:
+                        current_msg = f"**{label}**"
+                        st.session_state["poll_last_status"] = status
+                        st.session_state["poll_last_rotation"] = time.time()
+                        st.session_state["poll_current_msg"] = current_msg
+                    elif time.time() - last_rotation > 20:
+                        current_msg = f"*{random.choice(FUNNY_MESSAGES)}*"
+                        st.session_state["poll_last_rotation"] = time.time()
+                        st.session_state["poll_current_msg"] = current_msg
+
+                    status_text.write(current_msg)
+                    time.sleep(2)
+                    st.rerun()
 
     # --- Results display (from session_state: just-finished OR restored from URL) ---
     results = st.session_state.get("results")
