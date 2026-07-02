@@ -561,8 +561,8 @@ def main():
                             break
 
                     except Empty:
-                        # Rotate a funny status message every 10s during long waits
-                        if time.time() - last_rotation > 10:
+                        # Rotate a funny status message every 20s during long waits
+                        if time.time() - last_rotation > 20:
                             status_text.write(f"*{random.choice(FUNNY_MESSAGES)}*")
                             last_rotation = time.time()
                         continue
