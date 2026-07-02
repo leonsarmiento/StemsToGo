@@ -200,14 +200,20 @@ def run_demucs(wav_path: str, output_dir: str) -> bool:
 
 
 def get_stem_paths(output_dir: str) -> dict[str, str]:
-    """Get paths to all 4 stem MP3 files."""
+    """Find all 4 stem MP3 files produced by Demucs.
+
+    Demucs nests its output as <output_dir>/<model>/<track>/<stem>.mp3,
+    so we search recursively rather than assuming a fixed path.
+    """
     stem_paths = {}
+    out_root = Path(output_dir)
     for stem in STEMS:
-        path = os.path.join(output_dir, stem + OUTPUT_SUFFIX)
-        if os.path.exists(path):
-            stem_paths[stem] = path
+        matches = list(out_root.rglob(f"{stem}.mp3"))
+        if matches:
+            stem_paths[stem] = str(matches[0])
+            logger.info(f"Found {stem} stem: {matches[0]}")
         else:
-            logger.warning(f"Missing stem file: {path}")
+            logger.warning(f"Missing stem file: {stem}.mp3 under {output_dir}")
 
     return stem_paths
 
